@@ -484,7 +484,140 @@ def train(model_path):
                 print('Saved.')
             except:
                 print('Save failed')
+               
+       
+def train_one2one(model_path):
+    print('Please wait. It takes several minutes. Do not quit!')
 
+    with tf.device('/device:CPU:0'):
+        G = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
+        F = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
+        b_train = tf.placeholder(tf.bool)
+
+    # Launch the graph in a session
+    config = tf.ConfigProto(allow_soft_placement=True)
+    config.gpu_options.allow_growth = True
+
+    with tf.device('/device:GPU:0'):
+        fake_F = translator(G, activation='swish', norm='instance', b_train=b_train, scope='translator', use_upsample=False)
+        fake_G = translator(F, activation='swish', norm='instance', b_train=b_train, scope='translator', use_upsample=False)
+
+    with tf.device('/device:GPU:1'):
+        fake_G_feature, fake_G_logit = discriminator(fake_G, activation='swish', norm='instance', b_train=b_train, scope='discriminator_G', use_patch=True)
+        real_G_feature, real_G_logit = discriminator(G, activation='swish', norm='instance', b_train=b_train, scope='discriminator_G', use_patch=True)
+        fake_F_feature, fake_F_logit = discriminator(fake_F, activation='swish', norm='instance', b_train=b_train, scope='discriminator_F', use_patch=True)
+        real_F_feature, real_F_logit = discriminator(F, activation='swish', norm='instance', b_train=b_train, scope='discriminator_F', use_patch=True)
+
+    with tf.device('/device:GPU:0'):
+        recon_F = translator(fake_G, activation='swish', norm='instance', b_train=b_train, scope='translator',
+                             use_upsample=False)
+        recon_G = translator(fake_F, activation='swish', norm='instance', b_train=b_train, scope='translator',
+                             use_upsample=False)
+
+    reconstruction_loss_F = get_residual_loss(F, recon_F, type='l1')
+    reconstruction_loss_G = get_residual_loss(G, recon_G, type='l1')
+    cyclic_loss = reconstruction_loss_F + reconstruction_loss_G
+    alpha = 10.0
+    beta = 10.0
+    cyclic_loss = alpha * cyclic_loss
+
+    disc_loss_F, _, _ = get_discriminator_loss(real_F_logit, fake_F_logit, type='wgan')
+    disc_loss_G, _, _ = get_discriminator_loss(real_G_logit, fake_G_logit, type='wgan')
+
+    trans_loss_G2F = -tf.reduce_mean(fake_F_logit)
+    trans_loss_F2G = -tf.reduce_mean(fake_G_logit)
+
+    total_loss_G2F = trans_loss_G2F + alpha * reconstruction_loss_G
+    total_loss_F2G = trans_loss_F2G + beta * reconstruction_loss_F
+
+    disc_F_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator_F')
+    disc_G_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator_G')
+    disc_vars = disc_F_vars + disc_G_vars
+
+    trans_G2F_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='translator')
+    trans_F2G_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='translator')
+
+    # Alert: Clip range is critical to WGAN.
+    disc_weight_clip = [p.assign(tf.clip_by_value(p, -0.1, 0.1)) for p in disc_vars]
+
+    with tf.device('/device:GPU:0'):
+        trans_G2F_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(total_loss_G2F, var_list=trans_G2F_vars)
+        trans_F2G_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(total_loss_F2G, var_list=trans_F2G_vars)
+
+    with tf.device('/device:GPU:1'):
+        disc_F_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_F, var_list=disc_F_vars)
+        disc_G_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_G, var_list=disc_G_vars)
+
+    # Launch the graph in a session
+    with tf.Session(config=config) as sess:
+        sess.run(tf.global_variables_initializer())
+
+        try:
+            saver = tf.train.Saver()
+            saver.restore(sess, model_path)
+            print('Model Restored')
+        except:
+            print('Start New Training. Wait ...')
+
+        trG_dir = os.path.join(train_data, 'G').replace("\\", "/")
+        trF_dir = os.path.join(train_data, 'F').replace("\\", "/")
+        trG = os.listdir(trG_dir)
+        trF = os.listdir(trF_dir)
+
+        num_augmentations = 2  # How many augmentations per 1 sample
+        file_batch_size = batch_size // num_augmentations
+        num_critic = 5
+
+        for e in range(num_epoch):
+            trG = shuffle(trG)
+            trF = shuffle(trF)
+
+            training_batch = zip(range(0, len(trG), file_batch_size),  range(file_batch_size, len(trG)+1, file_batch_size))
+            itr = 0
+
+            for start, end in training_batch:
+                imgs_G = load_images(trG[start:end], base_dir=trG_dir, use_augmentation=True)
+                imgs_G = np.expand_dims(imgs_G, axis=3)
+                imgs_F = load_images(trF[start:end], base_dir=trF_dir, use_augmentation=True)
+                imgs_F = np.expand_dims(imgs_F, axis=3)
+
+                _, d_loss_G = sess.run([disc_G_optimizer, disc_loss_G],
+                                       feed_dict={G: imgs_G, F: imgs_F, b_train: True})
+
+                _, d_loss_F = sess.run([disc_F_optimizer, disc_loss_F],
+                                       feed_dict={G: imgs_G, F: imgs_F, b_train: True})
+
+                _ = sess.run([disc_weight_clip])
+
+                if itr % num_critic == 0:
+                    _, t_loss_G = sess.run([trans_G2F_optimizer, trans_loss_G2F], feed_dict={G: imgs_G, F: imgs_F, b_train: True})
+                    _, t_loss_F = sess.run([trans_F2G_optimizer, trans_loss_F2G], feed_dict={F: imgs_F, G: imgs_G,  b_train: True})
+
+                    print('epoch: ' + str(e) + ', d_loss_G: ' + str(d_loss_G) + ', d_loss_F: ' + str(d_loss_F) +
+                          ', t_loss_G: ' + str(t_loss_G) + ', t_loss_F: ' + str(t_loss_F))
+
+                    decoded_images_F, decoded_images_G = sess.run([fake_F, fake_G], feed_dict={G: imgs_G, F: imgs_F, b_train: True})
+                    decoded_images_F = np.squeeze(decoded_images_F)
+                    decoded_images_G = np.squeeze(decoded_images_G)
+                    cv2.imwrite('imgs/' + trG[start], (decoded_images_G[3] * 128.0) + 128.0)
+                    cv2.imwrite('imgs/' + trF[start], (decoded_images_F[3] * 128.0) + 128.0)
+
+                itr += 1
+
+                if itr % 200 == 0:
+                    try:
+                        print('Saving model...')
+                        saver.save(sess, model_path)
+                        print('Saved.')
+                    except:
+                        print('Save failed')
+            try:
+                print('Saving model...')
+                saver.save(sess, model_path)
+                print('Saved.')
+            except:
+                print('Save failed')
+                
 
 def test(model_path):
     pass
