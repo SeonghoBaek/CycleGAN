@@ -362,11 +362,14 @@ def train(model_path):
 
     with tf.device('/device:GPU:0'):
         fake_F = translator(G, activation='swish', norm='instance', b_train=b_train, scope='translator_G_to_F', use_upsample=False)
+        id_F = translator(F, activation='swish', norm='instance', b_train=b_train, scope='translator_G_to_F',
+                            use_upsample=False)
         fake_F_feature, fake_F_logit = discriminator(fake_F, activation='swish', norm='instance', b_train=b_train, scope='discriminator_F', use_patch=True)
         real_F_feature, real_F_logit = discriminator(F, activation='swish', norm='instance', b_train=b_train, scope='discriminator_F', use_patch=True)
 
     with tf.device('/device:GPU:1'):
         fake_G = translator(F, activation='swish', norm='instance', b_train=b_train, scope='translator_F_to_G', use_upsample=False)
+        id_G = translator(G, activation='swish', norm='instance', b_train=b_train, scope='translator_F_to_G', use_upsample=False)
         fake_G_feature, fake_G_logit = discriminator(fake_G, activation='swish', norm='instance', b_train=b_train, scope='discriminator_G', use_patch=True)
         real_G_feature, real_G_logit = discriminator(G, activation='swish', norm='instance', b_train=b_train, scope='discriminator_G', use_patch=True)
 
@@ -382,12 +385,17 @@ def train(model_path):
     cyclic_loss = reconstruction_loss_F + reconstruction_loss_G
     alpha = 10.0
     cyclic_loss = alpha * cyclic_loss
+    identity_loss_F = alpha * 0.5 * get_residual_loss(F, id_F, type='l1')
+    identity_loss_G = alpha * 0.5 * get_residual_loss(G, id_G, type='l1')
 
     disc_loss_F, _, _ = get_discriminator_loss(real_F_logit, fake_F_logit, type='wgan')
     disc_loss_G, _, _ = get_discriminator_loss(real_G_logit, fake_G_logit, type='wgan')
 
     trans_loss_G2F = -tf.reduce_mean(fake_F_logit)
     trans_loss_F2G = -tf.reduce_mean(fake_G_logit)
+
+    total_loss_G2F = trans_loss_G2F + cyclic_loss + identity_loss_F
+    total_loss_F2G = trans_loss_F2G + cyclic_loss + identity_loss_G
 
     disc_F_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator_F')
     disc_G_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator_G')
@@ -399,13 +407,13 @@ def train(model_path):
     # Alert: Clip range is critical to WGAN.
     disc_weight_clip = [p.assign(tf.clip_by_value(p, -0.1, 0.1)) for p in disc_vars]
 
-    disc_G_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_G, var_list=disc_G_vars)
-    disc_F_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_F, var_list=disc_F_vars)
-    trans_G2F_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(trans_loss_G2F, var_list=trans_G2F_vars)
-    trans_F2G_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(trans_loss_F2G, var_list=trans_F2G_vars)
+    with tf.device('/device:GPU:0'):
+        trans_G2F_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(total_loss_G2F, var_list=trans_G2F_vars)
+        disc_F_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_F, var_list=disc_F_vars)
 
     with tf.device('/device:GPU:1'):
-        cyclic_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(cyclic_loss)
+        trans_F2G_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(total_loss_F2G, var_list=trans_F2G_vars)
+        disc_G_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_G, var_list=disc_G_vars)
 
     # Launch the graph in a session
     with tf.Session(config=config) as sess:
@@ -441,21 +449,19 @@ def train(model_path):
                 imgs_F = np.expand_dims(imgs_F, axis=3)
 
                 _, d_loss_G = sess.run([disc_G_optimizer, disc_loss_G],
-                                        feed_dict={G: imgs_G, F: imgs_F, b_train: True})
+                                       feed_dict={G: imgs_G, F: imgs_F, b_train: True})
 
                 _, d_loss_F = sess.run([disc_F_optimizer, disc_loss_F],
-                                        feed_dict={G: imgs_G, F: imgs_F, b_train: True})
+                                       feed_dict={G: imgs_G, F: imgs_F, b_train: True})
 
                 _ = sess.run([disc_weight_clip])
 
                 if itr % num_critic == 0:
-                    _, t_loss_G = sess.run([trans_G2F_optimizer, trans_loss_G2F], feed_dict={G: imgs_G,  b_train: True})
-                    _, t_loss_F = sess.run([trans_F2G_optimizer, trans_loss_F2G], feed_dict={F: imgs_F,  b_train: True})
-                    _, c_loss = sess.run([cyclic_optimizer, cyclic_loss], feed_dict={G: imgs_G, F: imgs_F, b_train: True})
+                    _, t_loss_G = sess.run([trans_G2F_optimizer, trans_loss_G2F], feed_dict={G: imgs_G, F: imgs_F, b_train: True})
+                    _, t_loss_F = sess.run([trans_F2G_optimizer, trans_loss_F2G], feed_dict={F: imgs_F, G: imgs_G,  b_train: True})
 
                     print('epoch: ' + str(e) + ', d_loss_G: ' + str(d_loss_G) + ', d_loss_F: ' + str(d_loss_F) +
-                          ', t_loss_G: ' + str(t_loss_G) + ', t_loss_F: ' + str(t_loss_F) +
-                          ', c_loss: ' + str(c_loss))
+                          ', t_loss_G: ' + str(t_loss_G) + ', t_loss_F: ' + str(t_loss_F))
 
                     decoded_images_F, decoded_images_G = sess.run([fake_F, fake_G], feed_dict={G: imgs_G, F: imgs_F, b_train: True})
                     decoded_images_F = np.squeeze(decoded_images_F)
