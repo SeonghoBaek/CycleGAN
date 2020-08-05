@@ -14,61 +14,19 @@ def load_images(file_name_list, base_dir, use_augmentation=False):
     for file_name in file_name_list:
         fullname = os.path.join(base_dir, file_name).replace("\\", "/")
         img = cv2.imread(fullname)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-        for_face = True
-
-        if for_face is False:
-            # For SKC
-            if use_augmentation is True:
-                resized_img = cv2.resize(img, dsize=(512, 520), interpolation=cv2.INTER_CUBIC)
-                resized_img_hd = cv2.resize(img, dsize=(1024, 1040), interpolation=cv2.INTER_CUBIC)
-        else:
-            # For face
-            img = cv2.resize(img, dsize=(128, 128), interpolation=cv2.INTER_CUBIC)
+        #img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img = cv2.resize(img, dsize=(input_width, input_height), interpolation=cv2.INTER_CUBIC)
 
         if img is not None:
             img = np.array(img)
 
-            if for_face is True:
-                # For face
-                n_img = (img - 128.0) / 128.0
-                images.append(n_img)
+            n_img = (img - 128.0) / 128.0
+            images.append(n_img)
 
-                if use_augmentation is True:
-                    n_img = cv2.flip(img, 1)
-                    n_img = (img - 128.0) / 128.0
-                    images.append(n_img)
-            else:
-                img = img[4:260, 0:256]
-
-                # Center crop
-                center_x = 256 // 2
-                center_y = 256 // 2
-                img = img[center_y-64:center_y+64, center_x-64:center_x+64]
-                n_img = (img - 128.0) / 128.0
-                images.append(n_img)
-
-                if use_augmentation is True:
-                    n_img = cv2.flip(img, 1)
-                    n_img = (n_img - 128.0) / 128.0
-                    images.append(n_img)
-
-                    img = np.array(resized_img)
-                    img = img[8:520, 0:512]
-                    center_x = 512 // 2
-                    center_y = 512 // 2
-                    img = img[center_y-64:center_y+64, center_x-64:center_x+64]
-                    n_img = (img - 128.0) / 128.0
-                    images.append(n_img)
-
-                    img = np.array(resized_img_hd)
-                    img = img[16:1040, 0:1024]
-                    center_x = 1024 // 2
-                    center_y = 1024 // 2
-                    img = img[center_y - 64:center_y + 64, center_x - 64:center_x + 64]
-                    n_img = (img - 128.0) / 128.0
-                    images.append(n_img)
+            if use_augmentation is True:
+               n_img = cv2.flip(img, 1)
+               n_img = (n_img - 128.0) / 128.0
+               images.append(n_img)
 
     return np.array(images)
 
@@ -94,8 +52,8 @@ def discriminator(x, activation='relu', scope='discriminator_network', norm='lay
         print('Discriminator Input: ' + str(x.get_shape().as_list()))
         l = layers.conv(x, scope='conv_init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1],
                         non_linear_fn=None, bias=False)
-        l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_init')
-        l = act_func(l)
+        #l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_init')
+        #l = act_func(l)
 
         for i in range(num_iter):
             print('Discriminator Block ' + str(i) + ': ' + str(l.get_shape().as_list()))
@@ -278,7 +236,7 @@ def translator(x, activation='relu', scope='translator', norm='layer', use_upsam
             act_func = tf.nn.sigmoid
 
         bottleneck_width = 8
-        bottleneck_itr = 4
+        bottleneck_itr = 8
         num_iter = input_width // bottleneck_width
         num_iter = int(np.sqrt(num_iter))
 
@@ -287,8 +245,8 @@ def translator(x, activation='relu', scope='translator', norm='layer', use_upsam
 
         l = layers.conv(x, scope='conv_init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1],
                         non_linear_fn=None, bias=False)
-        l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_init')
-        l = act_func(l)
+        #l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_init')
+        #l = act_func(l)
 
         for i in range(num_iter):
             print('Translator Block ' + str(i) + ': ' + str(l.get_shape().as_list()))
@@ -352,50 +310,64 @@ def train(model_path):
     print('Please wait. It takes several minutes. Do not quit!')
 
     with tf.device('/device:CPU:0'):
-        G = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
-        F = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
+        G_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
+        F_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
+        G_FAKE_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
+        F_FAKE_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
         b_train = tf.placeholder(tf.bool)
 
     # Launch the graph in a session
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.allow_growth = True
 
-    with tf.device('/device:GPU:0'):
-        fake_F = translator(G, activation='swish', norm='instance', b_train=b_train, scope='translator_G_to_F', use_upsample=False)
-        id_F = translator(F, activation='swish', norm='instance', b_train=b_train, scope='translator_G_to_F',
-                            use_upsample=False)
-        fake_F_feature, fake_F_logit = discriminator(fake_F, activation='swish', norm='instance', b_train=b_train, scope='discriminator_F', use_patch=True)
-        real_F_feature, real_F_logit = discriminator(F, activation='swish', norm='instance', b_train=b_train, scope='discriminator_F', use_patch=True)
-
     with tf.device('/device:GPU:1'):
-        fake_G = translator(F, activation='swish', norm='instance', b_train=b_train, scope='translator_F_to_G', use_upsample=False)
-        id_G = translator(G, activation='swish', norm='instance', b_train=b_train, scope='translator_F_to_G', use_upsample=False)
-        fake_G_feature, fake_G_logit = discriminator(fake_G, activation='swish', norm='instance', b_train=b_train, scope='discriminator_G', use_patch=True)
-        real_G_feature, real_G_logit = discriminator(G, activation='swish', norm='instance', b_train=b_train, scope='discriminator_G', use_patch=True)
-
-    with tf.device('/device:GPU:0'):
+        fake_G = translator(F_IN, activation='swish', norm='instance', b_train=b_train, scope='translator_F_to_G',
+                            use_upsample=False)
+        fake_F = translator(G_IN, activation='swish', norm='instance', b_train=b_train, scope='translator_G_to_F',
+                            use_upsample=False)
+        id_G = translator(G_IN, activation='swish', norm='instance', b_train=b_train, scope='translator_F_to_G',
+                          use_upsample=False)
+        id_F = translator(F_IN, activation='swish', norm='instance', b_train=b_train, scope='translator_G_to_F',
+                          use_upsample=False)
         recon_F = translator(fake_G, activation='swish', norm='instance', b_train=b_train, scope='translator_G_to_F',
                              use_upsample=False)
-    with tf.device('/device:GPU:1'):
         recon_G = translator(fake_F, activation='swish', norm='instance', b_train=b_train, scope='translator_F_to_G',
                              use_upsample=False)
 
-    reconstruction_loss_F = get_residual_loss(F, recon_F, type='l1')
-    reconstruction_loss_G = get_residual_loss(G, recon_G, type='l1')
+    with tf.device('/device:GPU:0'):
+        _, G_FAKE_IN_logit = discriminator(G_FAKE_IN, activation='swish', norm='instance', b_train=b_train,
+                                                     scope='discriminator_G', use_patch=True)
+        _, F_FAKE_IN_logit = discriminator(F_FAKE_IN, activation='swish', norm='instance', b_train=b_train,
+                                                     scope='discriminator_F', use_patch=True)
+
+        _, real_G_logit = discriminator(G_IN, activation='swish', norm='instance', b_train=b_train,
+                                                     scope='discriminator_G', use_patch=True)
+        _, fake_G_logit = discriminator(fake_G, activation='swish', norm='instance', b_train=b_train,
+                                        scope='discriminator_G', use_patch=True)
+
+        _, real_F_logit = discriminator(F_IN, activation='swish', norm='instance', b_train=b_train,
+                                                     scope='discriminator_F', use_patch=True)
+        _, fake_F_logit = discriminator(fake_F, activation='swish', norm='instance', b_train=b_train,
+                                        scope='discriminator_F', use_patch=True)
+
+    reconstruction_loss_F = get_residual_loss(F_IN, recon_F, type='l1') + get_gradient_loss(F_IN, recon_F)
+    reconstruction_loss_G = get_residual_loss(G_IN, recon_G, type='l1') + get_gradient_loss(G_IN, recon_G)
     cyclic_loss = reconstruction_loss_F + reconstruction_loss_G
     alpha = 10.0
     cyclic_loss = alpha * cyclic_loss
-    identity_loss_F = alpha * 0.5 * get_residual_loss(F, id_F, type='l1')
-    identity_loss_G = alpha * 0.5 * get_residual_loss(G, id_G, type='l1')
 
-    disc_loss_F, _, _ = get_discriminator_loss(real_F_logit, fake_F_logit, type='wgan')
-    disc_loss_G, _, _ = get_discriminator_loss(real_G_logit, fake_G_logit, type='wgan')
+    identity_loss_F = alpha * (get_residual_loss(F_IN, id_F, type='l1') + get_gradient_loss(F_IN, id_F))
+    identity_loss_G = alpha * (get_residual_loss(G_IN, id_G, type='l1') + get_gradient_loss(G_IN, id_G))
+    identity_loss = 0.5 * (identity_loss_G + identity_loss_F)
 
     trans_loss_G2F = -tf.reduce_mean(fake_F_logit)
     trans_loss_F2G = -tf.reduce_mean(fake_G_logit)
 
-    total_loss_G2F = trans_loss_G2F + cyclic_loss + identity_loss_F
-    total_loss_F2G = trans_loss_F2G + cyclic_loss + identity_loss_G
+    total_trans_loss = trans_loss_G2F + trans_loss_F2G + cyclic_loss + identity_loss
+
+    disc_loss_F, _, _ = get_discriminator_loss(real_F_logit, F_FAKE_IN_logit, type='wgan')
+    disc_loss_G, _, _ = get_discriminator_loss(real_G_logit, G_FAKE_IN_logit, type='wgan')
+    total_disc_loss = 0.5 * disc_loss_F + 0.5 * disc_loss_G
 
     disc_F_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator_F')
     disc_G_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator_G')
@@ -403,17 +375,16 @@ def train(model_path):
 
     trans_G2F_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='translator_G_to_F')
     trans_F2G_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='translator_F_to_G')
+    trans_vars = trans_G2F_vars + trans_F2G_vars
 
     # Alert: Clip range is critical to WGAN.
-    disc_weight_clip = [p.assign(tf.clip_by_value(p, -0.1, 0.1)) for p in disc_vars]
+    disc_weight_clip = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in disc_vars]
 
     with tf.device('/device:GPU:0'):
-        trans_G2F_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(total_loss_G2F, var_list=trans_G2F_vars)
-        disc_F_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_F, var_list=disc_F_vars)
+        disc_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(total_disc_loss, var_list=disc_vars)
 
     with tf.device('/device:GPU:1'):
-        trans_F2G_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(total_loss_F2G, var_list=trans_F2G_vars)
-        disc_G_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_G, var_list=disc_G_vars)
+        trans_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(total_trans_loss, var_list=trans_vars)
 
     # Launch the graph in a session
     with tf.Session(config=config) as sess:
@@ -430,44 +401,46 @@ def train(model_path):
         trF_dir = os.path.join(train_data, 'F').replace("\\", "/")
         trG = os.listdir(trG_dir)
         trF = os.listdir(trF_dir)
+        total_input_size = min(len(trG), len(trF))
 
         num_augmentations = 2  # How many augmentations per 1 sample
         file_batch_size = batch_size // num_augmentations
         num_critic = 5
+        image_pool = util.ImagePool(maxsize=100)
 
         for e in range(num_epoch):
             trG = shuffle(trG)
-            trF = shuffle(trF)
+            tfF = shuffle(trF)
 
-            training_batch = zip(range(0, len(trG), file_batch_size),  range(file_batch_size, len(trG)+1, file_batch_size))
+            training_batch = zip(range(0, total_input_size, file_batch_size),  range(file_batch_size, total_input_size+1, file_batch_size))
             itr = 0
 
             for start, end in training_batch:
                 imgs_G = load_images(trG[start:end], base_dir=trG_dir, use_augmentation=True)
-                imgs_G = np.expand_dims(imgs_G, axis=3)
+                if len(imgs_G[0].shape) != 3:
+                    imgs_G = np.expand_dims(imgs_G, axis=3)
                 imgs_F = load_images(trF[start:end], base_dir=trF_dir, use_augmentation=True)
-                imgs_F = np.expand_dims(imgs_F, axis=3)
+                if len(imgs_F[0].shape) != 3:
+                    imgs_F = np.expand_dims(imgs_F, axis=3)
 
-                _, d_loss_G = sess.run([disc_G_optimizer, disc_loss_G],
-                                       feed_dict={G: imgs_G, F: imgs_F, b_train: True})
+                trans_G2F, trans_F2G = sess.run([fake_F, fake_G], feed_dict={G_IN: imgs_G, F_IN: imgs_F, b_train: True})
+                trans_G2F, trans_F2G = image_pool([trans_G2F, trans_F2G])
 
-                _, d_loss_F = sess.run([disc_F_optimizer, disc_loss_F],
-                                       feed_dict={G: imgs_G, F: imgs_F, b_train: True})
+                _, d_loss = sess.run([disc_optimizer, total_disc_loss],
+                                     feed_dict={G_IN: imgs_G, F_IN: imgs_F,
+                                                G_FAKE_IN: trans_F2G, F_FAKE_IN: trans_G2F, b_train: True})
 
                 _ = sess.run([disc_weight_clip])
 
                 if itr % num_critic == 0:
-                    _, t_loss_G = sess.run([trans_G2F_optimizer, trans_loss_G2F], feed_dict={G: imgs_G, F: imgs_F, b_train: True})
-                    _, t_loss_F = sess.run([trans_F2G_optimizer, trans_loss_F2G], feed_dict={F: imgs_F, G: imgs_G,  b_train: True})
+                    _, t_loss = sess.run([trans_optimizer, total_trans_loss], feed_dict={F_IN: imgs_F, G_IN: imgs_G, b_train: True})
 
-                    print('epoch: ' + str(e) + ', d_loss_G: ' + str(d_loss_G) + ', d_loss_F: ' + str(d_loss_F) +
-                          ', t_loss_G: ' + str(t_loss_G) + ', t_loss_F: ' + str(t_loss_F))
-
-                    decoded_images_F, decoded_images_G = sess.run([fake_F, fake_G], feed_dict={G: imgs_G, F: imgs_F, b_train: True})
-                    decoded_images_F = np.squeeze(decoded_images_F)
-                    decoded_images_G = np.squeeze(decoded_images_G)
-                    cv2.imwrite('imgs/' + trG[start], (decoded_images_G[3] * 128.0) + 128.0)
-                    cv2.imwrite('imgs/' + trF[start], (decoded_images_F[3] * 128.0) + 128.0)
+                    print('epoch: ' + str(e) + ', d_loss: ' + str(d_loss) +
+                          ', t_loss: ' + str(t_loss))
+                    decoded_images_F2G = np.squeeze(trans_F2G)
+                    decoded_images_G2F = np.squeeze(trans_G2F)
+                    cv2.imwrite('imgs/F2G_' + trF[start], (decoded_images_F2G[0] * 128.0) + 128.0)
+                    cv2.imwrite('imgs/G2F_' + trG[start], (decoded_images_G2F[0] * 128.0) + 128.0)
 
                 itr += 1
 
@@ -484,69 +457,76 @@ def train(model_path):
                 print('Saved.')
             except:
                 print('Save failed')
-               
-       
+
+
 def train_one2one(model_path):
     print('Please wait. It takes several minutes. Do not quit!')
 
     with tf.device('/device:CPU:0'):
-        G = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
-        F = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
+        G_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
+        F_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
+        G_FAKE_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
+        F_FAKE_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
         b_train = tf.placeholder(tf.bool)
 
     # Launch the graph in a session
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.allow_growth = True
 
-    with tf.device('/device:GPU:0'):
-        fake_F = translator(G, activation='swish', norm='instance', b_train=b_train, scope='translator', use_upsample=False)
-        fake_G = translator(F, activation='swish', norm='instance', b_train=b_train, scope='translator', use_upsample=False)
-
     with tf.device('/device:GPU:1'):
-        fake_G_feature, fake_G_logit = discriminator(fake_G, activation='swish', norm='instance', b_train=b_train, scope='discriminator_G', use_patch=True)
-        real_G_feature, real_G_logit = discriminator(G, activation='swish', norm='instance', b_train=b_train, scope='discriminator_G', use_patch=True)
-        fake_F_feature, fake_F_logit = discriminator(fake_F, activation='swish', norm='instance', b_train=b_train, scope='discriminator_F', use_patch=True)
-        real_F_feature, real_F_logit = discriminator(F, activation='swish', norm='instance', b_train=b_train, scope='discriminator_F', use_patch=True)
-
-    with tf.device('/device:GPU:0'):
+        fake_G = translator(F_IN, activation='swish', norm='instance', b_train=b_train, scope='translator',
+                            use_upsample=False)
+        fake_F = translator(G_IN, activation='swish', norm='instance', b_train=b_train, scope='translatorF',
+                            use_upsample=False)
         recon_F = translator(fake_G, activation='swish', norm='instance', b_train=b_train, scope='translator',
                              use_upsample=False)
         recon_G = translator(fake_F, activation='swish', norm='instance', b_train=b_train, scope='translator',
                              use_upsample=False)
 
-    reconstruction_loss_F = get_residual_loss(F, recon_F, type='l1')
-    reconstruction_loss_G = get_residual_loss(G, recon_G, type='l1')
-    cyclic_loss = reconstruction_loss_F + reconstruction_loss_G
+    with tf.device('/device:GPU:0'):
+        _, G_FAKE_IN_logit = discriminator(G_FAKE_IN, activation='swish', norm='instance', b_train=b_train,
+                                           scope='discriminator_G', use_patch=True)
+        _, F_FAKE_IN_logit = discriminator(F_FAKE_IN, activation='swish', norm='instance', b_train=b_train,
+                                           scope='discriminator_F', use_patch=True)
+
+        _, real_G_logit = discriminator(G_IN, activation='swish', norm='instance', b_train=b_train,
+                                        scope='discriminator_G', use_patch=True)
+        _, fake_G_logit = discriminator(fake_G, activation='swish', norm='instance', b_train=b_train,
+                                        scope='discriminator_G', use_patch=True)
+
+        _, real_F_logit = discriminator(F_IN, activation='swish', norm='instance', b_train=b_train,
+                                        scope='discriminator_F', use_patch=True)
+        _, fake_F_logit = discriminator(fake_F, activation='swish', norm='instance', b_train=b_train,
+                                        scope='discriminator_F', use_patch=True)
+
+    reconstruction_loss_F = get_residual_loss(F_IN, recon_F, type='l1') + get_gradient_loss(F_IN, recon_F)
+    reconstruction_loss_G = get_residual_loss(G_IN, recon_G, type='l1') + get_gradient_loss(G_IN, recon_G)
     alpha = 10.0
-    beta = 10.0
-    cyclic_loss = alpha * cyclic_loss
+    cyclic_loss_F = alpha * reconstruction_loss_F
+    cyclic_loss_G = alpha * reconstruction_loss_G
 
-    disc_loss_F, _, _ = get_discriminator_loss(real_F_logit, fake_F_logit, type='wgan')
-    disc_loss_G, _, _ = get_discriminator_loss(real_G_logit, fake_G_logit, type='wgan')
+    trans_loss_G2F = -tf.reduce_mean(fake_F_logit) + cyclic_loss_G
+    trans_loss_F2G = -tf.reduce_mean(fake_G_logit) + cyclic_loss_F
 
-    trans_loss_G2F = -tf.reduce_mean(fake_F_logit)
-    trans_loss_F2G = -tf.reduce_mean(fake_G_logit)
-
-    total_loss_G2F = trans_loss_G2F + alpha * reconstruction_loss_G
-    total_loss_F2G = trans_loss_F2G + beta * reconstruction_loss_F
+    disc_loss_F, _, _ = get_discriminator_loss(real_F_logit, F_FAKE_IN_logit, type='wgan')
+    disc_loss_G, _, _ = get_discriminator_loss(real_G_logit, G_FAKE_IN_logit, type='wgan')
 
     disc_F_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator_F')
     disc_G_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator_G')
     disc_vars = disc_F_vars + disc_G_vars
 
-    trans_G2F_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='translator')
-    trans_F2G_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='translator')
+    trans_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='translator')
 
     # Alert: Clip range is critical to WGAN.
-    disc_weight_clip = [p.assign(tf.clip_by_value(p, -0.1, 0.1)) for p in disc_vars]
+    disc_weight_clip = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in disc_vars]
 
     with tf.device('/device:GPU:0'):
-        trans_G2F_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(total_loss_G2F, var_list=trans_G2F_vars)
-        trans_F2G_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(total_loss_F2G, var_list=trans_F2G_vars)
+        disc_G_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_G, var_list=disc_G_vars)
+        disc_F_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_F, var_list=disc_F_vars)
 
     with tf.device('/device:GPU:1'):
-        disc_F_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_F, var_list=disc_F_vars)
-        disc_G_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_G, var_list=disc_G_vars)
+        trans_G_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(trans_loss_G2F, var_list=trans_vars)
+        trans_F_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(trans_loss_F2G, var_list=trans_vars)
 
     # Launch the graph in a session
     with tf.Session(config=config) as sess:
@@ -563,44 +543,52 @@ def train_one2one(model_path):
         trF_dir = os.path.join(train_data, 'F').replace("\\", "/")
         trG = os.listdir(trG_dir)
         trF = os.listdir(trF_dir)
+        total_input_size = min(len(trG), len(trF))
 
         num_augmentations = 2  # How many augmentations per 1 sample
         file_batch_size = batch_size // num_augmentations
         num_critic = 5
+        image_pool = util.ImagePool(maxsize=100)
 
         for e in range(num_epoch):
             trG = shuffle(trG)
-            trF = shuffle(trF)
+            tfF = shuffle(trF)
 
-            training_batch = zip(range(0, len(trG), file_batch_size),  range(file_batch_size, len(trG)+1, file_batch_size))
+            training_batch = zip(range(0, total_input_size, file_batch_size),
+                                 range(file_batch_size, total_input_size + 1, file_batch_size))
             itr = 0
 
             for start, end in training_batch:
                 imgs_G = load_images(trG[start:end], base_dir=trG_dir, use_augmentation=True)
-                imgs_G = np.expand_dims(imgs_G, axis=3)
+                if len(imgs_G[0].shape) != 3:
+                    imgs_G = np.expand_dims(imgs_G, axis=3)
                 imgs_F = load_images(trF[start:end], base_dir=trF_dir, use_augmentation=True)
-                imgs_F = np.expand_dims(imgs_F, axis=3)
+                if len(imgs_F[0].shape) != 3:
+                    imgs_F = np.expand_dims(imgs_F, axis=3)
 
-                _, d_loss_G = sess.run([disc_G_optimizer, disc_loss_G],
-                                       feed_dict={G: imgs_G, F: imgs_F, b_train: True})
+                trans_G2F, trans_F2G = sess.run([fake_F, fake_G], feed_dict={G_IN: imgs_G, F_IN: imgs_F, b_train: True})
+                trans_G2F, trans_F2G = image_pool([trans_G2F, trans_F2G])
 
-                _, d_loss_F = sess.run([disc_F_optimizer, disc_loss_F],
-                                       feed_dict={G: imgs_G, F: imgs_F, b_train: True})
+                _, d_g_loss = sess.run([disc_G_optimizer, disc_loss_G],
+                                     feed_dict={G_IN: imgs_G, F_IN: imgs_F,
+                                                G_FAKE_IN: trans_F2G, F_FAKE_IN: trans_G2F, b_train: True})
+                _, d_f_loss = sess.run([disc_F_optimizer, disc_loss_F],
+                                       feed_dict={G_IN: imgs_G, F_IN: imgs_F,
+                                                  G_FAKE_IN: trans_F2G, F_FAKE_IN: trans_G2F, b_train: True})
 
                 _ = sess.run([disc_weight_clip])
 
                 if itr % num_critic == 0:
-                    _, t_loss_G = sess.run([trans_G2F_optimizer, trans_loss_G2F], feed_dict={G: imgs_G, F: imgs_F, b_train: True})
-                    _, t_loss_F = sess.run([trans_F2G_optimizer, trans_loss_F2G], feed_dict={F: imgs_F, G: imgs_G,  b_train: True})
-
-                    print('epoch: ' + str(e) + ', d_loss_G: ' + str(d_loss_G) + ', d_loss_F: ' + str(d_loss_F) +
-                          ', t_loss_G: ' + str(t_loss_G) + ', t_loss_F: ' + str(t_loss_F))
-
-                    decoded_images_F, decoded_images_G = sess.run([fake_F, fake_G], feed_dict={G: imgs_G, F: imgs_F, b_train: True})
-                    decoded_images_F = np.squeeze(decoded_images_F)
-                    decoded_images_G = np.squeeze(decoded_images_G)
-                    cv2.imwrite('imgs/' + trG[start], (decoded_images_G[3] * 128.0) + 128.0)
-                    cv2.imwrite('imgs/' + trF[start], (decoded_images_F[3] * 128.0) + 128.0)
+                    _, t_g_loss = sess.run([trans_G_optimizer, trans_loss_G2F],
+                                         feed_dict={F_IN: imgs_F, G_IN: imgs_G, b_train: True})
+                    _, t_f_loss = sess.run([trans_F_optimizer, trans_loss_F2G],
+                                         feed_dict={F_IN: imgs_F, G_IN: imgs_G, b_train: True})
+                    print('epoch: ' + str(e) + ', d_loss: ' + str(d_g_loss + d_f_loss) +
+                          ', t_loss: ' + str(t_g_loss + t_f_loss))
+                    decoded_images_F2G = np.squeeze(trans_F2G)
+                    decoded_images_G2F = np.squeeze(trans_G2F)
+                    cv2.imwrite('imgs/F2G_' + trF[start], (decoded_images_F2G[0] * 128.0) + 128.0)
+                    cv2.imwrite('imgs/G2F_' + trG[start], (decoded_images_G2F[0] * 128.0) + 128.0)
 
                 itr += 1
 
@@ -617,7 +605,7 @@ def train_one2one(model_path):
                 print('Saved.')
             except:
                 print('Save failed')
-                
+
 
 def test(model_path):
     pass
@@ -637,24 +625,25 @@ if __name__ == '__main__':
     test_data = args.test_data
     model_path = args.model_path
 
-    dense_block_depth = 64
+    dense_block_depth = 128
 
     # Bottle neck(depth narrow down) depth. See Residual Dense Block and Residual Block.
     bottleneck_depth = 32
-    batch_size = 16
+    batch_size = 4
     representation_dim = 128
 
     img_width = 256
     img_height = 256
     input_width = 128
     input_height = 128
-    num_channel = 1
+    num_channel = 3
 
     test_size = 100
     num_epoch = 30000
 
     if args.mode == 'train':
         train(model_path)
+        #train_one2one(model_path)
     else:
         model_path = args.model_path
         test_data = args.test_data
