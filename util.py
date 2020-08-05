@@ -1,11 +1,6 @@
 # Adversarial Anomaly Detection
 #   - Utility functions
-#
-# Author: Seongho Baek
-# Contact: seongho.baek@sk.com
-#
-# For SKhynix only.
-# ==============================================================================
+==========================================================================
 
 import math
 import numpy as np
