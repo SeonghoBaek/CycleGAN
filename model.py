@@ -15,7 +15,7 @@ def load_images(file_name_list, base_dir, use_augmentation=False):
         fullname = os.path.join(base_dir, file_name).replace("\\", "/")
         img = cv2.imread(fullname)
         #img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        img = cv2.resize(img, dsize=(input_width, input_height), interpolation=cv2.INTER_CUBIC)
+        #img = cv2.resize(img, dsize=(input_width, input_height), interpolation=cv2.INTER_CUBIC)
 
         if img is not None:
             img = np.array(img)
@@ -52,8 +52,8 @@ def discriminator(x, activation='relu', scope='discriminator_network', norm='lay
         print('Discriminator Input: ' + str(x.get_shape().as_list()))
         l = layers.conv(x, scope='conv_init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1],
                         non_linear_fn=None, bias=False)
-        #l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_init')
-        #l = act_func(l)
+        l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_init')
+        l = act_func(l)
 
         for i in range(num_iter):
             print('Discriminator Block ' + str(i) + ': ' + str(l.get_shape().as_list()))
@@ -79,8 +79,10 @@ def discriminator(x, activation='relu', scope='discriminator_network', norm='lay
                                              scope='gp')
             print('Discriminator GP Dims: ' + str(feature.get_shape().as_list()))
 
-            logit = layers.global_avg_pool(last_layer, output_length=1, use_bias=False,
-                                             scope='gp_logit')
+            #logit = layers.global_avg_pool(last_layer, output_length=1, use_bias=False,
+            #                                 scope='gp_logit')
+            logit = layers.conv(last_layer, scope='conv_pred', filter_dims=[3, 3, 1], stride_dims=[1, 1],
+                        non_linear_fn=None, bias=False)
             print('Discriminator Logit Dims: ' + str(logit.get_shape().as_list()))
         else:
             print('Discriminator Attention Block : ' + str(l.get_shape().as_list()))
@@ -235,7 +237,7 @@ def translator(x, activation='relu', scope='translator', norm='layer', use_upsam
         else:
             act_func = tf.nn.sigmoid
 
-        bottleneck_width = 8
+        bottleneck_width = 64
         bottleneck_itr = 8
         num_iter = input_width // bottleneck_width
         num_iter = int(np.sqrt(num_iter))
@@ -243,17 +245,14 @@ def translator(x, activation='relu', scope='translator', norm='layer', use_upsam
         print('Translator Input: ' + str(x.get_shape().as_list()))
         block_depth = dense_block_depth
 
-        l = layers.conv(x, scope='conv_init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1],
+        l = layers.conv(x, scope='conv_init', filter_dims=[7, 7, block_depth], stride_dims=[1, 1],
                         non_linear_fn=None, bias=False)
-        #l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_init')
-        #l = act_func(l)
+        l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_init')
+        l = act_func(l)
 
         for i in range(num_iter):
             print('Translator Block ' + str(i) + ': ' + str(l.get_shape().as_list()))
 
-            #for j in range(1):
-            #    l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], num_layers=2, act_func=act_func,
-            #                                  norm=norm, b_train=b_train, scope='res_block_' + str(i) + '_' + str(j))
             block_depth = block_depth * 2
             l = layers.conv(l, scope='tr' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[2, 2], non_linear_fn=None)
             l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_' + str(i))
@@ -293,10 +292,9 @@ def translator(x, activation='relu', scope='translator', norm='layer', use_upsam
                 l = act_func(l)
 
         if use_upsample is False:
-            for i in range(2):
-                l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], num_layers=2,
-                                              act_func=act_func, norm=norm, b_train=b_train, use_dilation=False,
-                                              scope='tr_block_' + str(i))
+            l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], num_layers=2,
+                                          act_func=act_func, norm=norm, b_train=b_train, use_dilation=False,
+                                          scope='tr_block_' + str(i))
 
         l = layers.conv(l, scope='last', filter_dims=[1, 1, num_channel], stride_dims=[1, 1], non_linear_fn=tf.nn.tanh,
                         bias=False)
@@ -476,7 +474,7 @@ def train_one2one(model_path):
     with tf.device('/device:GPU:1'):
         fake_G = translator(F_IN, activation='swish', norm='instance', b_train=b_train, scope='translator',
                             use_upsample=False)
-        fake_F = translator(G_IN, activation='swish', norm='instance', b_train=b_train, scope='translatorF',
+        fake_F = translator(G_IN, activation='swish', norm='instance', b_train=b_train, scope='translator',
                             use_upsample=False)
         recon_F = translator(fake_G, activation='swish', norm='instance', b_train=b_train, scope='translator',
                              use_upsample=False)
@@ -629,13 +627,13 @@ if __name__ == '__main__':
 
     # Bottle neck(depth narrow down) depth. See Residual Dense Block and Residual Block.
     bottleneck_depth = 32
-    batch_size = 4
+    batch_size = 2
     representation_dim = 128
 
     img_width = 256
     img_height = 256
-    input_width = 128
-    input_height = 128
+    input_width = 256
+    input_height = 256
     num_channel = 3
 
     test_size = 100
