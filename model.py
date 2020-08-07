@@ -322,6 +322,7 @@ def train(model_path):
         Y_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
         X_FAKE_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
         Y_FAKE_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
+        LR = tf.placeholder(tf.float32, None)
         b_train = tf.placeholder(tf.bool)
 
     # Launch the graph in a session
@@ -403,10 +404,10 @@ def train(model_path):
         disc_weight_clip = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in disc_vars]
 
     with tf.device('/device:GPU:0'):
-        disc_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(total_disc_loss, var_list=disc_vars)
+        disc_optimizer = tf.train.RMSPropOptimizer(learning_rate=LR).minimize(total_disc_loss, var_list=disc_vars)
 
     with tf.device('/device:GPU:1'):
-        trans_optimizer = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(total_trans_loss, var_list=trans_vars)
+        trans_optimizer = tf.train.RMSPropOptimizer(learning_rate=LR).minimize(total_trans_loss, var_list=trans_vars)
 
     # Launch the graph in a session
     with tf.Session(config=config) as sess:
@@ -436,6 +437,8 @@ def train(model_path):
             num_critic = 5
 
         image_pool = util.ImagePool(maxsize=50)
+        learning_rate = 2e-4
+        lr_decay_step = 100
 
         for e in range(num_epoch):
             trX = shuffle(trX)
@@ -444,6 +447,8 @@ def train(model_path):
             training_batch = zip(range(0, total_input_size, file_batch_size),
                                  range(file_batch_size, total_input_size + 1, file_batch_size))
             itr = 0
+            if e > lr_decay_step:
+                learning_rate = learning_rate * (num_epoch - e)/(num_epoch - lr_decay_step)
 
             for start, end in training_batch:
                 imgs_X = load_images(trX[start:end], base_dir=trX_dir, use_augmentation=False)
@@ -458,14 +463,14 @@ def train(model_path):
 
                 _, d_loss = sess.run([disc_optimizer, total_disc_loss],
                                      feed_dict={X_IN: imgs_X, Y_IN: imgs_Y,
-                                                X_FAKE_IN: pool_Y2X, Y_FAKE_IN: pool_X2Y, b_train: True})
+                                                X_FAKE_IN: pool_Y2X, Y_FAKE_IN: pool_X2Y, b_train: True, LR: learning_rate})
 
                 if gan_mode == 'wgan':
                     _ = sess.run([disc_weight_clip])
 
                 if itr % num_critic == 0:
                     _, t_loss = sess.run([trans_optimizer, total_trans_loss],
-                                         feed_dict={Y_IN: imgs_Y, X_IN: imgs_X, b_train: True})
+                                         feed_dict={Y_IN: imgs_Y, X_IN: imgs_X, b_train: True, LR: learning_rate})
 
                     print('epoch: ' + str(e) + ', d_loss: ' + str(d_loss) +
                           ', t_loss: ' + str(t_loss))
@@ -582,8 +587,8 @@ def train_one2one(model_path):
         disc_weight_clip = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in disc_vars]
 
     with tf.device('/device:GPU:0'):
-        disc_optimizer_X = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_X, var_list=disc_vars)
-        disc_optimizer_Y = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_Y, var_list=disc_vars)
+        disc_optimizer_X = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_X, var_list=disc_X_vars)
+        disc_optimizer_Y = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_Y, var_list=disc_Y_vars)
 
     with tf.device('/device:GPU:1'):
         trans_optimizer_X2Y = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(trans_loss_X2Y, var_list=trans_vars)
@@ -706,7 +711,7 @@ if __name__ == '__main__':
     num_channel = 3
 
     test_size = 100
-    num_epoch = 30000
+    num_epoch = 300
     gan_mode = 'ls'
     use_identity_loss = False
 
