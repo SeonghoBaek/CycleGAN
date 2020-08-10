@@ -190,7 +190,7 @@ def batch_norm_conv(x, b_train, scope):
 
 def add_dense_layer(layer, filter_dims, act_func=tf.nn.relu, scope='dense_layer', norm='layer',
                     b_train=False, use_bias=False, dilation=[1, 1, 1, 1], sn=False):
-    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+    with tf.variable_scope(scope):
         l = layer
         l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm')
         l = act_func(l)
@@ -203,19 +203,21 @@ def add_dense_layer(layer, filter_dims, act_func=tf.nn.relu, scope='dense_layer'
 
 def add_residual_layer(layer, filter_dims, act_func=tf.nn.relu, scope='residual_layer',
                        norm='layer', b_train=False, use_bias=False, dilation=[1, 1, 1, 1], sn=False):
-    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+    with tf.variable_scope(scope):
         l = layer
-        l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm')
-        l = act_func(l)
         l = conv(l, scope='conv', filter_dims=filter_dims, stride_dims=[1, 1],
                  dilation=dilation, non_linear_fn=None, bias=use_bias, sn=sn)
+        l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm')
+
+        if act_func is not None:
+            l = act_func(l)
 
     return l
 
 
 def add_dense_transition_layer(layer, filter_dims, stride_dims=[1, 1], act_func=tf.nn.relu, scope='transition',
                                norm='layer', b_train=False, use_pool=True, use_bias=False, sn=False):
-    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+    with tf.variable_scope(scope):
         l = layer
         l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm')
         l = act_func(l)
@@ -237,7 +239,7 @@ def global_avg_pool(input_data, output_length=1, padding='VALID', use_bias=False
     height = input_dims[1]
     width = input_dims[2]
 
-    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+    with tf.variable_scope(scope):
         if num_channels_in != output_length:
             conv_weight = tf.get_variable('gap_weight', shape=[1, 1, num_channels_in, output_length],
                                           initializer=tf.truncated_normal_initializer(stddev=1.0))
@@ -265,7 +267,7 @@ def avg_pool(input, filter_dims, stride_dims, padding='SAME', scope='avgpool'):
     filter_h, filter_w = filter_dims
     stride_h, stride_w = stride_dims
 
-    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+    with tf.variable_scope(scope):
         pool = tf.nn.avg_pool(input, ksize=[1, filter_h, filter_w, 1], strides=[1, stride_h, stride_w, 1],
                               padding=padding)
 
@@ -420,7 +422,7 @@ def moments_for_layer_norm(x, axes=1, name=None):
 def layer_norm(x, scope="layer_norm", alpha_start=1.0, bias_start=0.0):
     # derived from:
     # https://github.com/LeavesBreathe/tensorflow_with_latest_papers, but simplified.
-    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+    with tf.variable_scope(scope):
         input_dims = x.get_shape().as_list()
 
         if len(input_dims) != 2:
@@ -443,7 +445,7 @@ def layer_norm(x, scope="layer_norm", alpha_start=1.0, bias_start=0.0):
 
 
 def instance_norm(x, scope="layer_norm", alpha_start=1.0, bias_start=0.0):
-    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+    with tf.variable_scope(scope):
         input_dims = x.get_shape().as_list()
 
         B = input_dims[0]
@@ -451,23 +453,15 @@ def instance_norm(x, scope="layer_norm", alpha_start=1.0, bias_start=0.0):
         w = input_dims[2]
         c = input_dims[3]
 
-        if len(input_dims) != 3:
-            x = tf.reshape(x, [B, h * w, c])
-            x = tf.transpose(x, perm=[0, 2, 1])
-
-        num_units = x.get_shape().as_list()[2]
-
-        alpha = tf.get_variable('alpha', [c, num_units],
-                                initializer=tf.constant_initializer(alpha_start), dtype=tf.float32)
-        bias = tf.get_variable('bias', [c, num_units],
+        alpha = tf.get_variable('alpha', [c],
+                                initializer=tf.random_normal_initializer(alpha_start, 0.02, dtype=tf.float32))
+        bias = tf.get_variable('bias', [c],
                                initializer=tf.constant_initializer(bias_start), dtype=tf.float32)
 
-        mean, variance = moments_for_layer_norm(x, axes=2)
-        y = (alpha * (x - mean)) / (variance) + bias
-
-        if len(input_dims) != 3:
-           y = tf.transpose(y, perm=[0, 2, 1])
-           y = tf.reshape(y, input_dims)
+        mean, variance = tf.nn.moments(x, axes=[1, 2], keep_dims=True)
+        eps = 1e-5
+        inv = tf.rsqrt(variance + eps)
+        y = alpha * ((x - mean)*inv) + bias
 
     return y
 
@@ -475,7 +469,7 @@ def instance_norm(x, scope="layer_norm", alpha_start=1.0, bias_start=0.0):
 def add_residual_dense_block(in_layer, filter_dims, num_layers, act_func=tf.nn.relu, norm='layer', b_train=False,
                              scope='residual_dense_block', use_dilation=False, stochastic_depth=False,
                              stochastic_survive=0.9):
-    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+    with tf.variable_scope(scope):
         l = in_layer
         input_dims = in_layer.get_shape().as_list()
         num_channel_in = input_dims[-1]
@@ -517,10 +511,10 @@ def add_residual_dense_block(in_layer, filter_dims, num_layers, act_func=tf.nn.r
         return l
 
 
-def add_residual_block(in_layer, filter_dims, num_layers, act_func=tf.nn.relu, norm='layer',
+def add_residual_block(in_layer, filter_dims, num_layers=2, act_func=tf.nn.relu, norm='layer',
                        b_train=False, use_residual=True, scope='residual_block', use_dilation=False,
-                       sn=False):
-    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+                       sn=False, use_bottleneck=False):
+    with tf.variable_scope(scope):
         l = in_layer
         input_dims = in_layer.get_shape().as_list()
         num_channel_in = input_dims[-1]
@@ -531,44 +525,30 @@ def add_residual_block(in_layer, filter_dims, num_layers, act_func=tf.nn.relu, n
         if use_dilation == True:
             dilation = [1, 2, 2, 1]
 
-        bn_depth = num_channel_in
-        '''
-            1x1 conv
-            ----------
-            BN
-            activation
-            3x3 conv
-            ----------
-            BN
-            activation
-            3x3 conv
-            ----------
-            BN
-            activation
-            1x1 conv
-            BN
-            ----------
-            Add
-            activation
-        '''
         # Bottle Neck Layer
-        bn_depth = num_channel_in // (num_layers * 2)
-        #bn_depth = bottleneck_depth
+        if use_bottleneck is True:
+            bn_depth = num_channel_out // (num_layers * 2)
+            l = conv(l, scope='bt_conv1', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1],
+                     dilation=[1, 1, 1, 1],
+                     non_linear_fn=None, bias=False, sn=False)
+            l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm1')
+            l = act_func(l)
+        else:
+            bn_depth = num_channel_out
 
-        l = conv(l, scope='bt_conv1', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1],
-                        dilation=[1, 1, 1, 1],
-                        non_linear_fn=None, bias=False, sn=False)
-
-        for i in range(num_layers):
+        for i in range(num_layers - 1):
             l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func, norm=norm, b_train=b_train,
                                           scope='layer' + str(i), dilation=dilation, sn=sn)
+        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
+                               b_train=b_train,
+                               scope='layer_last', dilation=dilation, sn=sn)
 
-        l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm_2')
-        l = act_func(l)
-        l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_in], stride_dims=[1, 1],
-                        dilation=[1, 1, 1, 1],
-                        non_linear_fn=None, bias=False, sn=False)
-        l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm_3')
+        if use_bottleneck is True:
+            l = act_func(l)
+            l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1],
+                     dilation=[1, 1, 1, 1],
+                     non_linear_fn=None, bias=False, sn=False)
+            l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm2')
 
         if use_residual is True:
             l = tf.add(l, in_layer)
@@ -578,7 +558,7 @@ def add_residual_block(in_layer, filter_dims, num_layers, act_func=tf.nn.relu, n
 
 
 def conv_normalize(input, norm='layer', b_train=True, scope='conv_norm'):
-    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+    with tf.variable_scope(scope):
         l = input
 
         if norm == 'layer':
