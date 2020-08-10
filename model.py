@@ -46,8 +46,9 @@ def discriminator(x, activation='relu', scope='discriminator_network', norm='lay
         bottleneck_width = 8
         if use_patch is True:
             bottleneck_width = 16
-        num_iter = input_width // bottleneck_width
-        num_iter = int(np.sqrt(num_iter))
+        #num_iter = input_width // bottleneck_width
+        #num_iter = int(np.sqrt(num_iter))
+        num_iter = 3
 
         print('Discriminator Input: ' + str(x.get_shape().as_list()))
         l = layers.conv(x, scope='conv_init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1],
@@ -79,14 +80,12 @@ def discriminator(x, activation='relu', scope='discriminator_network', norm='lay
                                              scope='gp')
             print('Discriminator GP Dims: ' + str(feature.get_shape().as_list()))
 
-            # logit = layers.global_avg_pool(last_layer, output_length=1, use_bias=False,
-            #                                 scope='gp_logit')
             logit = layers.conv(last_layer, scope='conv_pred', filter_dims=[3, 3, 1], stride_dims=[1, 1],
                                 non_linear_fn=None, bias=False)
             print('Discriminator Logit Dims: ' + str(logit.get_shape().as_list()))
         else:
-            print('Discriminator Attention Block : ' + str(l.get_shape().as_list()))
-            l = layers.self_attention(l, block_depth, act_func=act_func)
+            #print('Discriminator Attention Block : ' + str(l.get_shape().as_list()))
+            #l = layers.self_attention(l, block_depth, act_func=act_func)
             for i in range(2):
                 l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], num_layers=2, act_func=act_func,
                                               norm=norm, b_train=b_train, use_dilation=False,
@@ -242,7 +241,7 @@ def translator(x, activation='relu', scope='translator', norm='layer', use_upsam
             act_func = tf.nn.sigmoid
 
         bottleneck_width = 64
-        bottleneck_itr = 8
+        bottleneck_itr = 9
         num_iter = input_width // bottleneck_width
         num_iter = int(np.sqrt(num_iter))
 
@@ -263,7 +262,6 @@ def translator(x, activation='relu', scope='translator', norm='layer', use_upsam
             l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_' + str(i))
             l = act_func(l)
 
-        # [128, 128] -> [8, 8]
         for i in range(bottleneck_itr):
             print('Bottleneck Block : ' + str(l.get_shape().as_list()))
             l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], num_layers=2, act_func=act_func,
@@ -296,12 +294,7 @@ def translator(x, activation='relu', scope='translator', norm='layer', use_upsam
                 l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='deconv_norm_' + str(i))
                 l = act_func(l)
 
-        if use_upsample is False:
-            l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], num_layers=2,
-                                          act_func=act_func, norm=norm, b_train=b_train, use_dilation=False,
-                                          scope='tr_block_' + str(i))
-
-        l = layers.conv(l, scope='last', filter_dims=[1, 1, num_channel], stride_dims=[1, 1], non_linear_fn=tf.nn.tanh,
+        l = layers.conv(l, scope='last', filter_dims=[7, 7, num_channel], stride_dims=[1, 1], non_linear_fn=tf.nn.tanh,
                         bias=False)
 
         print('Translator Final: ' + str(l.get_shape().as_list()))
@@ -359,8 +352,8 @@ def train(model_path):
         _, fake_Y_logit = discriminator(fake_Y, activation='swish', norm='instance', b_train=b_train,
                                         scope=DY_scope, use_patch=True)
 
-    reconstruction_loss_Y = get_residual_loss(Y_IN, recon_Y, type='l1') + get_gradient_loss(Y_IN, recon_Y)
-    reconstruction_loss_X = get_residual_loss(X_IN, recon_X, type='l1') + get_gradient_loss(X_IN, recon_X)
+    reconstruction_loss_Y = get_residual_loss(Y_IN, recon_Y, type='l1')
+    reconstruction_loss_X = get_residual_loss(X_IN, recon_X, type='l1')
     cyclic_loss = reconstruction_loss_Y + reconstruction_loss_X
     alpha = 10.0
     cyclic_loss = alpha * cyclic_loss
@@ -381,8 +374,8 @@ def train(model_path):
         disc_loss_X, _, _ = get_discriminator_loss(real_X_logit, X_FAKE_IN_logit, type='wgan')
 
     if use_identity_loss is True:
-        identity_loss_Y = alpha * (get_residual_loss(Y_IN, id_Y, type='l1') + get_gradient_loss(Y_IN, id_Y))
-        identity_loss_X = alpha * (get_residual_loss(X_IN, id_X, type='l1') + get_gradient_loss(X_IN, id_X))
+        identity_loss_Y = alpha * (get_residual_loss(Y_IN, id_Y, type='l1'))
+        identity_loss_X = alpha * (get_residual_loss(X_IN, id_X, type='l1'))
         identity_loss = 0.5 * (identity_loss_X + identity_loss_Y)
         total_trans_loss = trans_loss_X2Y + trans_loss_Y2X + cyclic_loss + identity_loss
     else:
@@ -404,11 +397,12 @@ def train(model_path):
         disc_weight_clip = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in disc_vars]
 
     with tf.device('/device:GPU:0'):
-        disc_optimizer = tf.train.RMSPropOptimizer(learning_rate=LR).minimize(total_disc_loss, var_list=disc_vars)
+        #disc_optimizer = tf.train.RMSPropOptimizer(learning_rate=LR).minimize(total_disc_loss, var_list=disc_vars)
+        disc_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(total_disc_loss, var_list=disc_vars)
 
     with tf.device('/device:GPU:1'):
-        trans_optimizer = tf.train.RMSPropOptimizer(learning_rate=LR).minimize(total_trans_loss, var_list=trans_vars)
-
+        #trans_optimizer = tf.train.RMSPropOptimizer(learning_rate=LR).minimize(total_trans_loss, var_list=trans_vars)
+        trans_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(total_trans_loss, var_list=trans_vars)
     # Launch the graph in a session
     with tf.Session(config=config) as sess:
         sess.run(tf.global_variables_initializer())
@@ -426,7 +420,7 @@ def train(model_path):
         trY = os.listdir(trY_dir)
         total_input_size = min(len(trX), len(trY))
 
-        num_augmentations = 2  # How many augmentations per 1 sample
+        num_augmentations = 1  # How many augmentations per 1 sample
         file_batch_size = batch_size // num_augmentations
 
         if file_batch_size == 0:
@@ -469,15 +463,15 @@ def train(model_path):
                     _ = sess.run([disc_weight_clip])
 
                 if itr % num_critic == 0:
-                    _, t_loss = sess.run([trans_optimizer, total_trans_loss],
+                    _, t_loss, x2y_loss, y2x_loss = sess.run([trans_optimizer, total_trans_loss, trans_loss_X2Y, trans_loss_Y2X],
                                          feed_dict={Y_IN: imgs_Y, X_IN: imgs_X, b_train: True, LR: learning_rate})
 
                     print('epoch: ' + str(e) + ', d_loss: ' + str(d_loss) +
-                          ', t_loss: ' + str(t_loss))
+                          ', t_loss: ' + str(t_loss) + ', x2y: ' + str(x2y_loss) + ', y2x: ' + str(y2x_loss))
                     decoded_images_Y2X = np.squeeze(trans_Y2X)
                     decoded_images_X2Y = np.squeeze(trans_X2Y)
-                    cv2.imwrite('imgs/Y2X_' + trY[start], (decoded_images_Y2X * 128.0) + 128.0)
-                    cv2.imwrite('imgs/X2Y_' + trX[start], (decoded_images_X2Y * 128.0) + 128.0)
+                    cv2.imwrite('imgs/Y2X_' + trY[start], (decoded_images_Y2X[0] * 128.0) + 128.0)
+                    cv2.imwrite('imgs/X2Y_' + trX[start], (decoded_images_X2Y[0] * 128.0) + 128.0)
                 itr += 1
 
                 if itr % 200 == 0:
@@ -507,6 +501,7 @@ def train_one2one(model_path):
         Y_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
         X_FAKE_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
         Y_FAKE_IN = tf.placeholder(tf.float32, [batch_size, input_height, input_width, num_channel])
+        LR = tf.placeholder(tf.float32, None)
         b_train = tf.placeholder(tf.bool)
 
     # Launch the graph in a session
@@ -587,12 +582,12 @@ def train_one2one(model_path):
         disc_weight_clip = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in disc_vars]
 
     with tf.device('/device:GPU:0'):
-        disc_optimizer_X = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_X, var_list=disc_X_vars)
-        disc_optimizer_Y = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_loss_Y, var_list=disc_Y_vars)
+        disc_optimizer_X = tf.train.AdamOptimizer(learning_rate=LR).minimize(disc_loss_X, var_list=disc_X_vars)
+        disc_optimizer_Y = tf.train.AdamOptimizer(learning_rate=LR).minimize(disc_loss_Y, var_list=disc_Y_vars)
 
     with tf.device('/device:GPU:1'):
-        trans_optimizer_X2Y = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(trans_loss_X2Y, var_list=trans_vars)
-        trans_optimizer_Y2X = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(trans_loss_Y2X, var_list=trans_vars)
+        trans_optimizer_X2Y = tf.train.AdamOptimizer(learning_rate=LR).minimize(trans_loss_X2Y, var_list=trans_vars)
+        trans_optimizer_Y2X = tf.train.AdamOptimizer(learning_rate=LR).minimize(trans_loss_Y2X, var_list=trans_vars)
 
     # Launch the graph in a session
     with tf.Session(config=config) as sess:
@@ -622,6 +617,8 @@ def train_one2one(model_path):
             num_critic = 5
 
         image_pool = util.ImagePool(maxsize=50)
+        learning_rate = 2e-4
+        lr_decay_step = 100
 
         for e in range(num_epoch):
             trX = shuffle(trX)
@@ -630,6 +627,8 @@ def train_one2one(model_path):
             training_batch = zip(range(0, total_input_size, file_batch_size),
                                  range(file_batch_size, total_input_size + 1, file_batch_size))
             itr = 0
+            if e > lr_decay_step:
+                learning_rate = learning_rate * (num_epoch - e)/(num_epoch - lr_decay_step)
 
             for start, end in training_batch:
                 imgs_X = load_images(trX[start:end], base_dir=trX_dir, use_augmentation=False)
@@ -643,18 +642,18 @@ def train_one2one(model_path):
                 pool_X2Y, pool_Y2X = image_pool([trans_X2Y, trans_Y2X])
 
                 _, dx_loss = sess.run([disc_optimizer_X, disc_loss_X],
-                                     feed_dict={X_IN: imgs_X, X_FAKE_IN: pool_Y2X, b_train: True})
+                                     feed_dict={X_IN: imgs_X, X_FAKE_IN: pool_Y2X, b_train: True, LR: learning_rate})
                 _, dy_loss = sess.run([disc_optimizer_Y, disc_loss_Y],
-                                     feed_dict={Y_IN: imgs_Y, Y_FAKE_IN: pool_X2Y, b_train: True})
+                                     feed_dict={Y_IN: imgs_Y, Y_FAKE_IN: pool_X2Y, b_train: True, LR: learning_rate})
 
                 if gan_mode == 'wgan':
                     _ = sess.run([disc_weight_clip])
 
                 if itr % num_critic == 0:
                     _, tx2y_loss = sess.run([trans_optimizer_X2Y, trans_loss_X2Y],
-                                         feed_dict={X_IN: imgs_X, b_train: True})
+                                         feed_dict={X_IN: imgs_X, b_train: True, LR: learning_rate})
                     _, ty2x_loss = sess.run([trans_optimizer_Y2X, trans_loss_Y2X],
-                                         feed_dict={Y_IN: imgs_Y, b_train: True})
+                                         feed_dict={Y_IN: imgs_Y, b_train: True, LR: learning_rate})
 
                     print('epoch: ' + str(e) + ', d_loss: ' + str(dx_loss + dy_loss) +
                           ', t_loss: ' + str(tx2y_loss + ty2x_loss))
@@ -697,11 +696,11 @@ if __name__ == '__main__':
     test_data = args.test_data
     model_path = args.model_path
 
-    dense_block_depth = 128
+    dense_block_depth = 64
 
     # Bottle neck(depth narrow down) depth. See Residual Dense Block and Residual Block.
     bottleneck_depth = 32
-    batch_size = 1
+    batch_size = 2
     representation_dim = 128
 
     img_width = 256
