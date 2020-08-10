@@ -1,6 +1,5 @@
 # Adversarial Anomaly Detection
 #   - Utility functions
-==========================================================================
 
 import math
 import numpy as np
@@ -141,13 +140,15 @@ class ImagePool(object):
             self.images.append(image)
             self.num_img += 1
             return image
-        if np.random.rand() > 0.5:
-            idx = int(np.random.rand()*self.maxsize)
-            tmp1 = copy.copy(self.images[idx])[0]
-            self.images[idx][0] = image[0]
-            idx = int(np.random.rand()*self.maxsize)
-            tmp2 = copy.copy(self.images[idx])[1]
-            self.images[idx][1] = image[1]
+
+        idx = int(np.random.rand() * self.maxsize)
+        tmp1 = copy.copy(self.images[idx])[0]
+        self.images[idx][0] = image[0]
+        idx = int(np.random.rand() * self.maxsize)
+        tmp2 = copy.copy(self.images[idx])[1]
+        self.images[idx][1] = image[1]
+
+        if np.random.rand() > 0.1:
             return [tmp1, tmp2]
         else:
             return image
