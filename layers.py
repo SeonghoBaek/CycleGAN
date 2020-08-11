@@ -512,7 +512,7 @@ def add_residual_dense_block(in_layer, filter_dims, num_layers, act_func=tf.nn.r
 
 
 def add_residual_block(in_layer, filter_dims, num_layers=2, act_func=tf.nn.relu, norm='layer',
-                       b_train=False, use_residual=True, scope='residual_block', use_dilation=False,
+                       b_train=False, use_residual=True, scope='residual_block', use_dilation=True,
                        sn=False, use_bottleneck=False):
     with tf.variable_scope(scope):
         l = in_layer
@@ -539,9 +539,19 @@ def add_residual_block(in_layer, filter_dims, num_layers=2, act_func=tf.nn.relu,
         for i in range(num_layers - 1):
             l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func, norm=norm, b_train=b_train,
                                           scope='layer' + str(i), dilation=dilation, sn=sn)
-        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
-                               b_train=b_train,
-                               scope='layer_last', dilation=dilation, sn=sn)
+
+        if use_dilation is True:
+            dl = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
+                                    b_train=b_train,
+                                    scope='dilated_layer', dilation=dilation, sn=sn)
+            l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
+                                   b_train=b_train,
+                                   scope='layer_last', dilation=dilation, sn=sn)
+            l = tf.add(l, dl)
+        else:
+            l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
+                                   b_train=b_train,
+                                   scope='layer_last', dilation=dilation, sn=sn)
 
         if use_bottleneck is True:
             l = act_func(l)
