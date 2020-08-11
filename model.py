@@ -15,7 +15,7 @@ def load_images(file_name_list, base_dir, use_augmentation=False):
         fullname = os.path.join(base_dir, file_name).replace("\\", "/")
         img = cv2.imread(fullname)
         # img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        # img = cv2.resize(img, dsize=(input_width, input_height), interpolation=cv2.INTER_CUBIC)
+        img = cv2.resize(img, dsize=(input_width, input_height), interpolation=cv2.INTER_CUBIC)
 
         if img is not None:
             img = np.array(img)
@@ -88,8 +88,7 @@ def discriminator(x, activation='relu', scope='discriminator_network', norm='lay
             #l = layers.self_attention(l, block_depth, act_func=act_func)
             for i in range(2):
                 l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], num_layers=2, act_func=act_func,
-                                              norm=norm, b_train=b_train, use_dilation=False,
-                                              scope='at_block_' + str(i))
+                                              norm=norm, b_train=b_train, scope='at_block_' + str(i))
 
             last_layer = l
             feature = layers.global_avg_pool(last_layer, output_length=representation_dim // 8, use_bias=False,
@@ -265,7 +264,7 @@ def translator(x, activation='relu', scope='translator', norm='layer', use_upsam
         for i in range(bottleneck_itr):
             print('Bottleneck Block : ' + str(l.get_shape().as_list()))
             l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], num_layers=2, act_func=act_func,
-                                          norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i))
+                                          norm=norm, b_train=b_train, scope='bt_block_' + str(i))
 
         for i in range(num_iter):
             block_depth = block_depth // 2
@@ -284,7 +283,7 @@ def translator(x, activation='relu', scope='translator', norm='layer', use_upsam
 
                 for j in range(2):
                     l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], num_layers=2,
-                                                  act_func=act_func, norm=norm, b_train=b_train, use_dilation=False,
+                                                  act_func=act_func, norm=norm, b_train=b_train,
                                                   scope='block_' + str(i) + '_' + str(j))
             else:
                 l = layers.deconv(l, b_size=l.get_shape().as_list()[0], scope='deconv_' + str(i),
@@ -398,7 +397,9 @@ def train(model_path):
 
     with tf.device('/device:GPU:0'):
         #disc_optimizer = tf.train.RMSPropOptimizer(learning_rate=LR).minimize(total_disc_loss, var_list=disc_vars)
-        disc_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(total_disc_loss, var_list=disc_vars)
+        #disc_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(total_disc_loss, var_list=disc_vars)
+        disc_optimizer_X = tf.train.AdamOptimizer(learning_rate=LR).minimize(disc_loss_X, var_list=disc_X_vars)
+        disc_optimizer_Y = tf.train.AdamOptimizer(learning_rate=LR).minimize(disc_loss_Y, var_list=disc_Y_vars)
 
     with tf.device('/device:GPU:1'):
         #trans_optimizer = tf.train.RMSPropOptimizer(learning_rate=LR).minimize(total_trans_loss, var_list=trans_vars)
@@ -410,9 +411,9 @@ def train(model_path):
         try:
             saver = tf.train.Saver()
             saver.restore(sess, model_path)
-            print('Model Restored')
+            print(util.COLORS.OKGREEN + 'Model Restored' + util.COLORS.ENDC)
         except:
-            print('Start New Training. Wait ...')
+            print(util.COLORS.WARNING + 'Start New Training. Wait ...' + util.COLORS.ENDC)
 
         trX_dir = os.path.join(train_data, 'X').replace("\\", "/")
         trY_dir = os.path.join(train_data, 'Y').replace("\\", "/")
@@ -430,7 +431,7 @@ def train(model_path):
         if gan_mode == 'wgan':
             num_critic = 5
 
-        image_pool = util.ImagePool(maxsize=50)
+        image_pool = util.ImagePool(maxsize=100)
         learning_rate = 2e-4
         lr_decay_step = 100
 
@@ -455,10 +456,17 @@ def train(model_path):
                 trans_X2Y, trans_Y2X = sess.run([fake_Y, fake_X], feed_dict={X_IN: imgs_X, Y_IN: imgs_Y, b_train: True})
                 pool_X2Y, pool_Y2X = image_pool([trans_X2Y, trans_Y2X])
 
-                _, d_loss = sess.run([disc_optimizer, total_disc_loss],
-                                     feed_dict={X_IN: imgs_X, Y_IN: imgs_Y,
-                                                X_FAKE_IN: pool_Y2X, Y_FAKE_IN: pool_X2Y, b_train: True, LR: learning_rate})
-
+                #_, d_loss = sess.run([disc_optimizer, total_disc_loss],
+                #                     feed_dict={X_IN: imgs_X, Y_IN: imgs_Y,
+                #                                X_FAKE_IN: pool_Y2X, Y_FAKE_IN: pool_X2Y, b_train: True, LR: learning_rate})
+                _, d_loss_X = sess.run([disc_optimizer_Y, disc_loss_Y],
+                                       feed_dict={Y_IN: imgs_Y,
+                                                  Y_FAKE_IN: pool_X2Y, b_train: True,
+                                                  LR: learning_rate})
+                _, d_loss_Y = sess.run([disc_optimizer_X, disc_loss_X],
+                                       feed_dict={X_IN: imgs_X,
+                                                  X_FAKE_IN: pool_Y2X, b_train: True,
+                                                  LR: learning_rate})
                 if gan_mode == 'wgan':
                     _ = sess.run([disc_weight_clip])
 
@@ -466,27 +474,29 @@ def train(model_path):
                     _, t_loss, x2y_loss, y2x_loss = sess.run([trans_optimizer, total_trans_loss, trans_loss_X2Y, trans_loss_Y2X],
                                          feed_dict={Y_IN: imgs_Y, X_IN: imgs_X, b_train: True, LR: learning_rate})
 
-                    print('epoch: ' + str(e) + ', d_loss: ' + str(d_loss) +
-                          ', t_loss: ' + str(t_loss) + ', x2y: ' + str(x2y_loss) + ', y2x: ' + str(y2x_loss))
+                    print(util.COLORS.HEADER + 'epoch: ' + str(e) + util.COLORS.ENDC + ', ' +
+                          util.COLORS.OKGREEN + 'd_loss_X: ' + str(d_loss_X) + ', ' + 'd_loss_Y: ' + str(d_loss_Y) + util.COLORS.ENDC +
+                          ', ' + util.COLORS.WARNING + 't_loss: ' + str(t_loss) + util.COLORS.ENDC + ', ' +
+                          util.COLORS.OKBLUE + 'x2y: ' + str(x2y_loss) + ', y2x: ' + str(y2x_loss) + util.COLORS.ENDC)
                     decoded_images_Y2X = np.squeeze(trans_Y2X)
                     decoded_images_X2Y = np.squeeze(trans_X2Y)
-                    cv2.imwrite('imgs/Y2X_' + trY[start], (decoded_images_Y2X[0] * 128.0) + 128.0)
-                    cv2.imwrite('imgs/X2Y_' + trX[start], (decoded_images_X2Y[0] * 128.0) + 128.0)
+                    #cv2.imwrite('imgs/Y2X_' + trY[start], (decoded_images_Y2X * 128.0) + 128.0)
+                    cv2.imwrite('imgs/X2Y_' + trX[start], (decoded_images_X2Y * 128.0) + 128.0)
                 itr += 1
 
                 if itr % 200 == 0:
                     try:
-                        print('Saving model...')
+                        print(util.COLORS.WARNING + 'Saving model...' + util.COLORS.ENDC)
                         saver.save(sess, model_path)
-                        print('Saved.')
+                        print(util.COLORS.OKGREEN + 'Saved.' + util.COLORS.ENDC)
                     except:
-                        print('Save failed')
+                        print(util.COLORS.FAIL + 'Save failed' + util.COLORS.ENDC)
             try:
-                print('Saving model...')
+                print(util.COLORS.WARNING + 'Saving model...' + util.COLORS.ENDC)
                 saver.save(sess, model_path)
-                print('Saved.')
+                print(util.COLORS.OKGREEN + 'Saved.' + util.COLORS.ENDC)
             except:
-                print('Save failed')
+                print(util.COLORS.FAIL + 'Save failed' + util.COLORS.ENDC)
 
 
 def train_one2one(model_path):
@@ -606,7 +616,7 @@ def train_one2one(model_path):
         trY = os.listdir(trY_dir)
         total_input_size = min(len(trX), len(trY))
 
-        num_augmentations = 2  # How many augmentations per 1 sample
+        num_augmentations = 1  # How many augmentations per 1 sample
         file_batch_size = batch_size // num_augmentations
 
         if file_batch_size == 0:
@@ -700,7 +710,7 @@ if __name__ == '__main__':
 
     # Bottle neck(depth narrow down) depth. See Residual Dense Block and Residual Block.
     bottleneck_depth = 32
-    batch_size = 2
+    batch_size = 1
     representation_dim = 128
 
     img_width = 256
@@ -712,7 +722,7 @@ if __name__ == '__main__':
     test_size = 100
     num_epoch = 300
     gan_mode = 'ls'
-    use_identity_loss = False
+    use_identity_loss = True
 
     if args.mode == 'train':
         train(model_path)
