@@ -1,3 +1,9 @@
+# ==============================================================================
+# Author: Seongho Baek
+# Contact: seonghobaek@gmail.com
+#
+# ==============================================================================
+
 import tensorflow as tf
 
 
@@ -116,6 +122,40 @@ def batch_norm(x, b_train, scope, reuse=False):
         normed = tf.nn.batch_normalization(x, mean, var, beta, gamma, 1e-3)
 
         return normed
+
+
+def coord_conv(input, scope, filter_dims, stride_dims, padding='SAME',
+         non_linear_fn=tf.nn.relu, dilation=[1, 1, 1, 1], bias=False, sn=False):
+    input_dims = input.get_shape().as_list()
+    batch_size, height, width, channels = input_dims
+
+    xx_ones = tf.ones([batch_size, width], dtype=tf.int32)
+    xx_ones = tf.expand_dims(xx_ones, -1)
+    xx_range = tf.tile(tf.expand_dims(tf.range(height), 0), [batch_size, 1])
+    xx_range = tf.expand_dims(xx_range, 1)
+    xx_channel = tf.matmul(xx_ones, xx_range)
+    xx_channel = tf.expand_dims(xx_channel, -1)
+
+    print('Coordinate X: ' + str(xx_channel.get_shape().as_list()))
+
+    yy_ones = tf.ones([batch_size, height], dtype=tf.int32)
+    yy_ones = tf.expand_dims(yy_ones, 1)
+    yy_range = tf.tile(tf.expand_dims(tf.range(width), 0), [batch_size, 1])
+    yy_range = tf.expand_dims(yy_range, -1)
+    yy_channel = tf.matmul(yy_range, yy_ones)
+    yy_channel = tf.expand_dims(yy_channel, -1)
+    print('Coordinate Y: ' + str(yy_channel.get_shape().as_list()))
+
+    xx_channel = tf.cast(xx_channel, tf.float32) / (width - 1)
+    xx_channel = xx_channel * 2 - 1
+    yy_channel = tf.cast(yy_channel, tf.float32) / (height - 1)
+    yy_channel = yy_channel * 2 - 1
+
+    rr = tf.sqrt(tf.square(xx_channel) + tf.square(yy_channel))
+
+    coord_tensor = tf.concat([input, xx_channel, yy_channel, rr], axis=-1)
+
+    return conv(coord_tensor, scope, filter_dims, stride_dims, padding, non_linear_fn, dilation, bias, sn)
 
 
 def conv(input, scope, filter_dims, stride_dims, padding='SAME',
